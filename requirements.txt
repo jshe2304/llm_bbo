@@ -1,0 +1,19 @@
+# LLM and Agent frameworks
+langchain-core>=0.2.0
+langchain-openai>=0.1.0
+langgraph>=0.2.0
+
+# YAHPO benchmark for hyperparameter optimization
+yahpo-gym>=1.0.0
+
+# COCO/BBOB benchmark (provides cocoex module)
+cocopp>=2.6
+
+# Utilities
+tqdm>=4.60.0
+typing_extensions>=4.0.0
+
+# Visualization (for notebook)
+numpy>=1.20.0
+matplotlib>=3.5.0
+
