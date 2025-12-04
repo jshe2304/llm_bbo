@@ -1,5 +1,8 @@
 import sys
 import math
+import json
+import os
+from datetime import datetime
 from yahpo_gym.benchmark_set import BenchmarkSet
 from tqdm import tqdm
 import optimizers
@@ -13,14 +16,7 @@ TASK_PROMPT_TEMPLATE = (
 )
 
 # LCBench scenarios to benchmark on
-INSTANCES = ["3945", "167120", "168330", "146818"]
-
-# Target metric to minimize (val_cross_entropy is a good default for lcbench)
-TARGET_METRIC = "val_cross_entropy"
-
-# Parameters to exclude from optimization (fixed by instance)
 EXCLUDED_PARAMS = {"OpenML_task_id"}
-
 
 def format_bound(value, direction, sig_figs=1):
     """Format a numeric bound, rounding conservatively (up for lower, down for upper)."""
@@ -75,7 +71,7 @@ def get_param_names(bench):
     return [name for name in config_space.get_hyperparameter_names() if name not in EXCLUDED_PARAMS]
 
 
-def create_objective_wrapper(bench, param_names, instance_id, target_metric=TARGET_METRIC):
+def create_objective_wrapper(bench, param_names, instance_id):
     """
     Create a wrapper function that converts tuple inputs to dictionary configs
     and returns the target metric value.
@@ -94,28 +90,44 @@ def create_objective_wrapper(bench, param_names, instance_id, target_metric=TARG
         if isinstance(result, list):
             result = result[0]
         
-        return result[target_metric]
+        return float(result['val_cross_entropy'])
     
     return objective
 
 
-def benchmark(optimizer, instances=INSTANCES, budget=20):
+def save_history(history, output_path):
+    """
+    Save optimization history to a JSON file.
+    
+    Args:
+        history: List of (candidate_tuple, function_value, loop_time) tuples
+        output_path: Path to save the history
+    """
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # Format history entries with named parameters
+
+    # Save to file
+    with open(output_path, 'w') as f:
+        json.dump(history, f, indent=2)
+
+def benchmark(optimizer, budget=4):
     """Run the optimizer on YAHPO LCBench instances."""
+
+    bench = BenchmarkSet("lcbench")
     
-    results = {}
-    
-    for instance_id in tqdm(instances, desc="Instances"):
-        # Initialize benchmark with this instance
-        bench = BenchmarkSet("lcbench")
+    for instance_id in tqdm(bench.instances, desc="Instances"):
+
+        # Set benchmark instance
         bench.set_instance(instance_id)
         
         # Get parameter info
         param_names = get_param_names(bench)
-        n_dimensions = len(param_names)
         
         # Build task prompt
         task_prompt = TASK_PROMPT_TEMPLATE.format(
-            n_dimensions=n_dimensions,
+            n_dimensions=len(param_names),
             parameter_space_repr=get_parameter_space_repr(bench)
         )
 
@@ -123,27 +135,15 @@ def benchmark(optimizer, instances=INSTANCES, budget=20):
         objective = create_objective_wrapper(bench, param_names, instance_id)
         
         # Run optimizer
-        history, loop_times = optimizer(objective, task_prompt, budget=budget)
-
-        print(history)
-        print(loop_times)
+        history = optimizer(objective, task_prompt, budget=budget)
         
-        # Store results
-        results[instance_id] = {
-            "history": history,
-            "loop_times": loop_times
-        }
-        
-        print(f"\nInstance {instance_id}:")
-        print(f"  History: {results[instance_id]['history']}")
-        print(f"  Loop times: {results[instance_id]['loop_times']}")
-    
-    return results
-
+        # Save history to file
+        results_path = os.path.join("./yahpo_results", f"{optimizer.__name__}", f"{instance_id}.json")
+        save_history(history, results_path)
 
 if __name__ == "__main__":
     optimizer_name = sys.argv[1] if len(sys.argv) > 1 else "llm_optimizer"
     optimizer = getattr(optimizers, optimizer_name)
 
-    results = benchmark(optimizer)
+    benchmark(optimizer)
     

@@ -26,7 +26,7 @@ def benchmark(optimizer):
 
     # Create a fresh suite for this optimizer
     suite_name = "bbob"
-    suite_options = "dimensions: 2 instances: 1" 
+    suite_options = "dimensions: 2 instance_indices: 1" 
 
     # Create a fresh suite for this optimizer
     suite = cocoex.Suite(suite_name, "", suite_options)
@@ -48,10 +48,7 @@ def benchmark(optimizer):
             parameter_space_repr=get_parameter_space_repr(problem)
         )
 
-        best_parameters, best_value = optimizer(problem, task_prompt, budget=20)
-        print(f"Best parameters: {best_parameters}")
-        print(f"Best value: {best_value}")
-        break
+        history = optimizer(problem, task_prompt, budget=32)
 
 if __name__ == "__main__":
     optimizer_name = sys.argv[1]

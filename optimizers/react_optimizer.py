@@ -29,7 +29,7 @@ ACT_PROMPT_TEMPLATE = (
 class AgentState(TypedDict):
     task_description: BaseMessage
     evaluation_history: List[BaseMessage]
-    reasoning: BaseMessage | None
+    reasoning: BaseMessage
     remaining_budget: int
     
 class ReactOptimizer:
@@ -42,7 +42,7 @@ class ReactOptimizer:
 
         # Create tool(s) bound to this instance without exposing `self` in schema
         @tool
-        def _evaluate_function(x: tuple | list) -> float:
+        def _evaluate_function(x: tuple) -> float:
             '''
             Evaluate the function F at the point specified by the tuple x.
             - x must be a Python tuple/list of the correct dimensionality.
@@ -172,7 +172,7 @@ def print_message(message):
         print(message)
     print()
 
-def react_optimizer(function, task_prompt: str, budget: int = 20): 
+def react_optimizer(function, task_prompt: str, budget: int = 32): 
     '''
     Function wrapper to run the ReactOptimizer agent on a problem.
     '''
@@ -207,5 +207,5 @@ def react_optimizer(function, task_prompt: str, budget: int = 20):
             loop_times.append(time.time() - loop_start)
             loop_start = None
 
-    # Return best parameters, value, and loop times
-    return agent.history, loop_times
+    # Return history
+    return list(zip(*zip(*agent.history, loop_times)))
