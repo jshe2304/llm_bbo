@@ -26,7 +26,7 @@ def benchmark(optimizer):
 
     # Create a fresh suite for this optimizer
     suite_name = "bbob"
-    suite_options = "dimensions: 2 instance_indices: 1" 
+    suite_options = "dimensions: 2 instance_indices: 1, 2, 3, 4" 
 
     # Create a fresh suite for this optimizer
     suite = cocoex.Suite(suite_name, "", suite_options)
@@ -35,7 +35,7 @@ def benchmark(optimizer):
     observer = cocoex.Observer(
         suite_name,
         f"result_folder: {optimizer.__name__}_on_{suite_name} "
-        f"algorithm_name: {optimizer.__name__}"
+        f"algorithm_name: long_{optimizer.__name__}"
     )
 
     # Loop over all problems in the suite

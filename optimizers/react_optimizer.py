@@ -20,6 +20,16 @@ REASON_PROMPT_TEMPLATE = (
     "so you should think carefully about where to use your next evaluation.\n"
 )
 
+REASON_PROMPT_TEMPLATE = (
+    "Reason about the next point you should evaluate F at.\n"
+    "You may want to think about the following: \n"
+    "1. What do we know already about the structure of F?\n"
+    "2. What information do we need to gather?\n"
+    "3. Where in the parameter space should we gather that information?\n"
+    "Remember, you only have {remaining_budget} evaluations remaining,\n"
+    "so you should think carefully about where to use your next evaluation.\n"
+)
+
 ACT_PROMPT_TEMPLATE = (
     "You are an optimizer minimizing a function F.\n"
     "You have already reasoned about F and where you should evaluate it next.\n"

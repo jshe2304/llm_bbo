@@ -140,11 +140,11 @@ def benchmark(optimizer, budget=32):
         break
         
         # Save history to file
-        results_path = os.path.join("./yahpo_results", f"{optimizer.__name__}", f"{instance_id}.json")
+        results_path = os.path.join("./yahpo_results", f"long_{optimizer.__name__}", f"{instance_id}.json")
         save_history(history, results_path)
 
 if __name__ == "__main__":
-    optimizer_name = sys.argv[1] if len(sys.argv) > 1 else "llm_optimizer"
+    optimizer_name = sys.argv[1]
     optimizer = getattr(optimizers, optimizer_name)
 
     benchmark(optimizer)
