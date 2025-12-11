@@ -12,7 +12,7 @@ from langgraph.prebuilt import ToolNode
 
 REASON_PROMPT_TEMPLATE = (
     "Reason about the next point you should evaluate F at.\n"
-    "Using one sentence each, reason about the following: \n"
+    "You may want to think about the following: \n"
     "1. What do we know already about the structure of F?\n"
     "2. What information do we need to gather?\n"
     "3. Where in the parameter space should we gather that information?\n"
@@ -153,23 +153,74 @@ class ReactOptimizer:
 
         return agent
 
-def print_message(message):
+def print_message(message, use_color: bool = True):
+    """Pretty-print a message from the optimizer agent stream."""
+    
+    # ANSI color codes
+    COLORS = {
+        'reason': '\033[94m',   # Blue
+        'act': '\033[93m',      # Yellow
+        'tools': '\033[92m',    # Green
+        'reset': '\033[0m',
+        'bold': '\033[1m',
+        'dim': '\033[2m',
+    } if use_color else {k: '' for k in ['reason', 'act', 'tools', 'reset', 'bold', 'dim']}
+    
+    def header(name: str, color_key: str):
+        color = COLORS[color_key]
+        reset = COLORS['reset']
+        bold = COLORS['bold']
+        return f"{color}{bold}{'─' * 3} {name} {'─' * (40 - len(name))}{reset}"
+    
     try:
-        if 'act' in message:
-            tool_call = message['act']['evaluation_history'][-1].additional_kwargs['tool_calls'][0]
-            function_name = tool_call['function']['name']
-            argument = tool_call['function']['arguments']
-            print('---Act Node---')
-            print(f'{function_name}({argument})')
-        elif 'reason' in message:
-            print('---Reason Node---')
-            reasoning = message['reason']['reasoning'].content
-            print(reasoning)
+        if 'reason' in message:
+            state = message['reason']
+            print(header("Reason", "reason"))
+            reasoning = state.get('reasoning')
+            if reasoning and hasattr(reasoning, 'content'):
+                print(reasoning.content)
+            budget = state.get('remaining_budget')
+            if budget is not None:
+                print(f"{COLORS['dim']}[Budget remaining: {budget}]{COLORS['reset']}")
+                
+        elif 'act' in message:
+            state = message['act']
+            print(header("Act", "act"))
+            eval_history = state.get('evaluation_history', [])
+            if eval_history:
+                last_msg = eval_history[-1]
+                tool_calls = getattr(last_msg, 'additional_kwargs', {}).get('tool_calls', [])
+                if tool_calls:
+                    for tc in tool_calls:
+                        func = tc.get('function', {})
+                        name = func.get('name', 'unknown')
+                        args = func.get('arguments', '{}')
+                        print(f"  → {name}({args})")
+                else:
+                    print(f"  {last_msg.content if hasattr(last_msg, 'content') else last_msg}")
+                    
         elif 'tools' in message:
-            print('---Tools Node---')
-            print(message['tools']['evaluation_history'][-1].content)
-    except:
-        print(message)
+            state = message['tools']
+            print(header("Tools", "tools"))
+            eval_history = state.get('evaluation_history', [])
+            if eval_history:
+                # Show the tool result (usually the last message)
+                last_msg = eval_history[-1]
+                if hasattr(last_msg, 'content'):
+                    print(f"  Result: {last_msg.content}")
+                else:
+                    print(f"  {last_msg}")
+            budget = state.get('remaining_budget')
+            if budget is not None:
+                print(f"{COLORS['dim']}[Budget remaining: {budget}]{COLORS['reset']}")
+        else:
+            # Unknown message type - show keys
+            print(f"[Unknown node: {list(message.keys())}]")
+            
+    except (KeyError, AttributeError, IndexError, TypeError) as e:
+        # Fallback with error context for debugging
+        print(f"[Parse error: {type(e).__name__}] {message}")
+    
     print()
 
 def react_optimizer(function, task_prompt: str, budget: int = 32): 
@@ -198,6 +249,7 @@ def react_optimizer(function, task_prompt: str, budget: int = 32):
         },
         {'recursion_limit': 3 * budget + 1}
     ):
+        print_message(message)
         # Start timing at reason node (beginning of loop)
         if 'reason' in message:
             loop_start = time.time()
@@ -208,4 +260,4 @@ def react_optimizer(function, task_prompt: str, budget: int = 32):
             loop_start = None
 
     # Return history
-    return list(zip(*zip(*agent.history, loop_times)))
+    return [(x, v, t) for (x, v), t in zip(agent.history, loop_times)]

@@ -40,7 +40,7 @@ def benchmark(optimizer):
 
     # Loop over all problems in the suite
     for problem in tqdm(suite):
-        problem.observe_with(observer)
+        #problem.observe_with(observer)
 
         # Build task prompt
         task_prompt = TASK_PROMPT_TEMPLATE.format(
@@ -48,7 +48,8 @@ def benchmark(optimizer):
             parameter_space_repr=get_parameter_space_repr(problem)
         )
 
-        history = optimizer(problem, task_prompt, budget=32)
+        optimizer(problem, task_prompt, budget=32)
+        break
 
 if __name__ == "__main__":
     optimizer_name = sys.argv[1]

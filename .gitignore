@@ -1,5 +1,7 @@
 yahpo_data/
 exdata/
+yahpo_results/
+ppdata/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

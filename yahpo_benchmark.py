@@ -112,7 +112,7 @@ def save_history(history, output_path):
     with open(output_path, 'w') as f:
         json.dump(history, f, indent=2)
 
-def benchmark(optimizer, budget=4):
+def benchmark(optimizer, budget=32):
     """Run the optimizer on YAHPO LCBench instances."""
 
     bench = BenchmarkSet("lcbench")
@@ -136,6 +136,8 @@ def benchmark(optimizer, budget=4):
         
         # Run optimizer
         history = optimizer(objective, task_prompt, budget=budget)
+
+        break
         
         # Save history to file
         results_path = os.path.join("./yahpo_results", f"{optimizer.__name__}", f"{instance_id}.json")
