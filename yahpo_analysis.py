@@ -1,216 +1,262 @@
-#!/usr/bin/env python3
-"""
-Compute Dolan–Moré performance profiles from experimental results stored as
-
-    yahpo_results/{optimizer_name}/{blackbox_function_id}.json
-
-Each JSON file is a list of evaluations:
-[
-  [ [param_1, param_2, ...], function_value_at_that_point, time_it_took_to_decide ],
-  ...
-]
-
-This script:
-  * treats the performance measure t_{p,a} for optimizer a on problem p
-    as the **best (minimum) function value** seen in that JSON file.
-  * assumes **smaller is better** (e.g. loss). If your metric is to be
-    maximized (e.g. accuracy), either:
-        - store -metric in the JSON, or
-        - adapt the code where indicated below.
-
-It then computes Dolan–Moré performance profiles:
-
-    r_{p,a} = t_{p,a} / min_b t_{p,b}
-
-and plots, for each optimizer a,
-
-    rho_a(tau) = fraction of problems p with r_{p,a} <= tau
-"""
-
-import argparse
-import json
 import os
-import glob
+import json
+from collections import defaultdict
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 
-def load_best_values(results_root):
-    """
-    Scan results_root/yahpo_results/{optimizer}/{problem}.json and
-    return a dict:
+# =============================================================================
+# 1. Load data and compute best values per optimizer & function
+# =============================================================================
 
-        best_values[optimizer][problem_id] = best_value (float)
+def load_best_values(base_dir="yahpo_results"):
     """
-    best_values = {}
+    Walks directory tree:
+        yahpo_results/{optimizer_name}/{blackbox_function_id}.json
 
-    # optimizers are subdirectories of results_root
-    for opt_name in sorted(os.listdir(results_root)):
-        opt_dir = os.path.join(results_root, opt_name)
+    Each JSON file is a list of:
+        [ [param_1, param_2, ...], function_value, decision_time ]
+
+    Returns:
+        best_values: dict[optimizer][function_id] -> best_function_value
+    """
+    best_values = defaultdict(dict)
+
+    if not os.path.isdir(base_dir):
+        raise ValueError(f"Base dir '{base_dir}' does not exist")
+
+    for optimizer_name in os.listdir(base_dir):
+        opt_dir = os.path.join(base_dir, optimizer_name)
         if not os.path.isdir(opt_dir):
             continue
 
-        best_values[opt_name] = {}
-        json_paths = glob.glob(os.path.join(opt_dir, "*.json"))
-
-        for path in json_paths:
-            problem_id = os.path.splitext(os.path.basename(path))[0]
-
-            with open(path, "r") as f:
-                data = json.load(f)
-
-            if not data:
-                # empty file, skip
+        for filename in os.listdir(opt_dir):
+            if not filename.endswith(".json"):
                 continue
 
-            # data is a list of [params_list, value, decision_time]
-            # extract all function values for this optimizer/problem
+            function_id = os.path.splitext(filename)[0]
+            filepath = os.path.join(opt_dir, filename)
+
+            with open(filepath, "r") as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError as e:
+                    print(f"Warning: could not read {filepath}: {e}")
+                    continue
+
+            if not data:
+                continue
+
+            # data is a list of [params, value, decision_time]
             values = [entry[1] for entry in data]
-
-            # If your metric is to be maximized, you could do:
-            # values = [-entry[1] for entry in data]
-            # so that "smaller is better" still holds.
-            best_val = min(values)
-
-            best_values[opt_name][problem_id] = best_val
+            best_val = float(min(values))
+            best_values[optimizer_name][function_id] = best_val
 
     return best_values
 
 
-def compute_ratios(best_values):
-    """
-    Given best_values[optimizer][problem] = t_{p,a}, compute the
-    performance ratios:
+# =============================================================================
+# 2. Performance profiles (Dolan–Moré)
+# =============================================================================
 
-        r_{p,a} = t_{p,a} / min_b t_{p,b}
+def compute_performance_profile(best_values, ratio_fail=1e3, num_points=200):
+    """
+    Computes performance profiles for all optimizers across all functions.
+
+    best_values: dict[optimizer][function_id] -> best_function_value
 
     Returns:
-        optimizers: list of optimizer names
-        problems:   list of problem IDs actually used
-        ratios:     np.ndarray shape (n_problems, n_optimizers)
+        taus: 1D array of tau values
+        perf_profiles: dict[optimizer] -> (taus, rho(tau)) arrays
     """
     optimizers = sorted(best_values.keys())
-
-    # union of all problem IDs across optimizers
-    all_problems = sorted(
-        {pid for opt in optimizers for pid in best_values[opt].keys()}
+    # union of all function IDs
+    all_functions = sorted(
+        {fid for opt in optimizers for fid in best_values[opt].keys()}
     )
 
-    # Build matrix t[p, a] with Inf for missing combinations
-    t = np.full((len(all_problems), len(optimizers)), np.inf, dtype=float)
+    if not optimizers or not all_functions:
+        raise ValueError("No optimizers or functions found in best_values")
 
-    for j, opt in enumerate(optimizers):
-        for i, problem in enumerate(all_problems):
-            if problem in best_values[opt]:
-                t[i, j] = best_values[opt][problem]
+    # ratio[optimizer][function_id] = performance ratio
+    ratio = {opt: {fid: ratio_fail for fid in all_functions} for opt in optimizers}
 
-    # per-problem best across optimizers
-    t_min = np.min(t, axis=1)
+    finite_ratios = []
 
-    # remove problems where all optimizers are missing (t_min == inf)
-    valid_mask = ~np.isinf(t_min)
-    t = t[valid_mask]
-    t_min = t_min[valid_mask]
-    used_problems = [p for k, p in enumerate(all_problems) if valid_mask[k]]
+    # For each function, compute best value across optimizers that have it,
+    # then assign ratio = f_opt / f_best for those optimizers.
+    for fid in all_functions:
+        # gather available values for this function
+        vals = [(opt, best_values[opt][fid])
+                for opt in optimizers if fid in best_values[opt]]
 
-    if t.shape[0] == 0:
-        raise RuntimeError("No valid (problem, optimizer) combinations found.")
+        if not vals:
+            # no optimizer has this function, skip
+            continue
 
-    # small epsilon to avoid divide-by-zero if t_min is extremely small
-    eps = 1e-12
-    ratios = t / (t_min[:, None] + eps)
+        f_best = min(v for _, v in vals)
 
-    return optimizers, used_problems, ratios
+        for opt, v in vals:
+            r = v / f_best if f_best != 0 else 1.0
+            ratio[opt][fid] = r
+            finite_ratios.append(r)
+
+    if not finite_ratios:
+        raise ValueError("No finite ratios computed; check your data")
+
+    max_finite = max(finite_ratios)
+    tau_max = min(max_finite * 1.1, ratio_fail)
+    tau_min = 1.0
+
+    taus = np.linspace(tau_min, tau_max, num_points)
+
+    # Now compute performance profile for each optimizer
+    perf_profiles = {}
+
+    n_problems = len(all_functions)
+
+    for opt in optimizers:
+        r_list = np.array([ratio[opt][fid] for fid in all_functions], dtype=float)
+
+        rhos = []
+        for tau in taus:
+            # fraction of problems where r <= tau
+            success_fraction = np.mean(r_list <= tau)
+            rhos.append(success_fraction)
+
+        perf_profiles[opt] = (taus, np.array(rhos))
+
+    return taus, perf_profiles
 
 
-def compute_performance_profile(ratios, taus):
+def plot_performance_profiles(perf_profiles, title="Performance Profiles", save_path="performance_profiles.png"):
     """
-    Given ratios[p, a] and a vector of tau values, compute:
-
-        rho_a(tau) = fraction of problems p with ratios[p, a] <= tau
-
-    Returns:
-        profile: np.ndarray shape (len(taus), n_optimizers)
-    """
-    n_problems, n_opts = ratios.shape
-    profile = np.zeros((len(taus), n_opts), dtype=float)
-
-    for k, tau in enumerate(taus):
-        profile[k, :] = np.sum(ratios <= tau, axis=0) / float(n_problems)
-
-    return profile
-
-
-def plot_performance_profiles(optimizers, taus, profile, output_path):
-    """
-    Plot performance profiles and save to output_path.
+    perf_profiles: dict[optimizer] -> (taus, rho(tau))
     """
     plt.figure()
-    for j, opt in enumerate(optimizers):
-        plt.plot(taus, profile[:, j], label=opt)
+    for opt, (taus, rhos) in perf_profiles.items():
+        plt.step(taus, rhos, where="post", label=opt)
 
-    plt.xlabel(r"$\tau$")
-    plt.ylabel("Fraction of problems")
-    plt.title("Performance Profiles")
-    plt.ylim(0.0, 1.05)
-    plt.xlim(1.0, taus[-1])
-    plt.grid(True, which="both", linestyle="--", alpha=0.3)
+    plt.xlabel(r"Performance ratio $\tau$")
+    plt.ylabel(r"Fraction of problems with $f_{a,t} \leq \tau f^*_{t}$")
+    plt.title(title)
+    plt.xlim(1, None)
+    plt.ylim(0, 1.01)
+    plt.grid(True, linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    print(f"Saved: {save_path}")
+    plt.show()
 
+
+# =============================================================================
+# 3. ECDF of normalized regret
+# =============================================================================
+
+def compute_normalized_regret(best_values, eps=1e-12):
+    """
+    Compute normalized regret per optimizer & function.
+
+    For each function t:
+        f_min_t = min_a f[a,t]
+        f_max_t = max_a f[a,t]
+
+    For each optimizer a, function t where it has data:
+        norm_regret[a,t] = (f[a,t] - f_min_t) / (f_max_t - f_min_t + eps)
+
+    Returns:
+        norm_regret: dict[optimizer] -> list of normalized regrets over functions
+    """
+    optimizers = sorted(best_values.keys())
+    all_functions = sorted(
+        {fid for opt in optimizers for fid in best_values[opt].keys()}
+    )
+
+    # Compute per-function min and max over all optimizers that have data
+    f_min = {}
+    f_max = {}
+    for fid in all_functions:
+        vals = [best_values[opt][fid]
+                for opt in optimizers if fid in best_values[opt]]
+        if not vals:
+            continue
+        f_min[fid] = min(vals)
+        f_max[fid] = max(vals)
+
+    norm_regret = {opt: [] for opt in optimizers}
+
+    for opt in optimizers:
+        for fid, f_val in best_values[opt].items():
+            if fid not in f_min or fid not in f_max:
+                continue
+            denom = f_max[fid] - f_min[fid]
+            nr = (f_val - f_min[fid]) / (denom + eps)
+            norm_regret[opt].append(nr)
+
+    return norm_regret
+
+
+def compute_ecdf(values):
+    """
+    Given a 1D list/array of values, return (x, y) for ECDF.
+    """
+    if len(values) == 0:
+        return np.array([]), np.array([])
+
+    x = np.sort(np.asarray(values))
+    n = len(x)
+    y = np.arange(1, n + 1) / n
+    return x, y
+
+
+def plot_ecdf_normalized_regret(norm_regret, title="ECDF of Normalized Regret", save_path="ecdf_normalized_regret.png"):
+    """
+    norm_regret: dict[optimizer] -> list of normalized regrets
+    """
+    plt.figure()
+    for opt, vals in norm_regret.items():
+        x, y = compute_ecdf(vals)
+        if len(x) == 0:
+            continue
+        plt.step(x, y, where="post", label=opt)
+
+    plt.xlabel("Normalized regret (0 = best for each function)")
+    plt.ylabel("ECDF")
+    plt.title(title)
+    plt.xlim(0, 1.0)
+    plt.ylim(0, 1.01)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    print(f"Saved: {save_path}")
+    plt.show()
+
+
+# =============================================================================
+# 4. Main
+# =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Compute performance profiles from yahpo_results."
-    )
-    parser.add_argument(
-        "--root",
-        type=str,
-        default="yahpo_results",
-        help="Root directory containing {optimizer}/{problem}.json",
-    )
-    parser.add_argument(
-        "--tau-max",
-        type=float,
-        default=10.0,
-        help="Maximum tau value for performance profiles.",
-    )
-    parser.add_argument(
-        "--num-tau",
-        type=int,
-        default=200,
-        help="Number of tau points between 1 and tau-max.",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="performance_profiles.png",
-        help="Path to save the performance profile plot.",
-    )
-    args = parser.parse_args()
+    base_dir = "yahpo_results"
 
-    # 1. Load best values (performance measure per optimizer/problem)
-    best_values = load_best_values(args.root)
+    # 1. Load best values
+    best_values = load_best_values(base_dir=base_dir)
+    print("Loaded best values for:")
+    for opt, fs in best_values.items():
+        print(f"  {opt}: {len(fs)} functions")
 
-    # 2. Compute performance ratios r_{p,a}
-    optimizers, problems, ratios = compute_ratios(best_values)
-    print(f"Loaded {len(optimizers)} optimizers and {len(problems)} problems.")
+    # 2. Performance profiles
+    taus, perf_profiles = compute_performance_profile(best_values)
+    plot_performance_profiles(perf_profiles,
+                              title="Performance Profiles (best f per function)")
 
-    # 3. Choose tau grid
-    #    You can also set tau_max to the max finite ratio if you prefer:
-    #    tau_max = min(args.tau_max, np.max(ratios[np.isfinite(ratios)]))
-    tau_max = args.tau_max
-    taus = np.linspace(1.0, tau_max, args.num_tau)
-
-    # 4. Compute performance profiles rho_a(tau)
-    profile = compute_performance_profile(ratios, taus)
-
-    # 5. Plot and save
-    plot_performance_profiles(optimizers, taus, profile, args.output)
-    print(f"Saved performance profile plot to {args.output}")
+    # 3. ECDF of normalized regret
+    norm_regret = compute_normalized_regret(best_values)
+    plot_ecdf_normalized_regret(norm_regret,
+                                title="ECDF of Normalized Regret (per function)")
 
 
 if __name__ == "__main__":
